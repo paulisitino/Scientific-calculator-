@@ -1,8 +1,210 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head><meta charset="UTF-8" /><title>Scientific Calculator</title></head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Scientific Calculator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh; display: flex; align-items: center;
+      justify-content: center; background: #000;
+      font-family: -apple-system, 'SF Pro Display', sans-serif;
+    }
+    .calc {
+      width: min(400px, 98vw); background: #000;
+      border-radius: 20px; padding: 16px;
+      box-shadow: 0 0 60px rgba(255,159,10,0.08);
+    }
+    .display {
+      text-align: right; padding: 12px 8px 8px; min-height: 100px;
+    }
+    .expr {
+      color: #636366; font-size: 13px; min-height: 20px;
+      margin-bottom: 4px; word-break: break-all;
+    }
+    .number {
+      color: #fff; font-weight: 200; letter-spacing: -1px;
+      line-height: 1; word-break: break-all; font-size: 52px;
+      transition: font-size 0.15s;
+    }
+    .number.small { font-size: 32px; }
+    .mode-info { color: #636366; font-size: 11px; margin-top: 4px; }
+    .grid { display: grid; gap: 10px; margin-top: 12px; }
+    .row { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; }
+    button {
+      width: 100%; aspect-ratio: 1; border-radius: 50%;
+      border: none; cursor: pointer; font-size: 11px;
+      font-weight: 500; color: #fff; background: #1c1c1e;
+      transition: filter 0.1s, transform 0.08s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    button:active { transform: scale(0.93); filter: brightness(1.3); }
+    button.op { background: #ff9f0a; }
+    button.fn { background: #636366; font-size: 10px; }
+  </style>
+</head>
+<body>
+<div class="calc">
+  <div class="display">
+    <div class="expr" id="expr">&nbsp;</div>
+    <div class="number" id="display">0</div>
+    <div class="mode-info" id="modeinfo">DEG</div>
+  </div>
+  <div class="grid" id="grid"></div>
+</div>
+
+<script>
+const BUTTONS = [
+  [{l:"Rad",t:"mode"},{l:"Deg",t:"mode"},{l:"x!",t:"un"},{l:"(",t:"par"},{l:")",t:"par"},
+   {l:"mc",t:"mem"},{l:"m+",t:"mem"},{l:"m−",t:"mem"},{l:"mr",t:"mem"},{l:"AC",t:"fn"}],
+  [{l:"2nd",t:"fn"},{l:"x²",t:"un"},{l:"x³",t:"un"},{l:"xʸ",t:"op2"},{l:"eˣ",t:"un"},
+   {l:"10ˣ",t:"un"},{l:"7",t:"dig"},{l:"8",t:"dig"},{l:"9",t:"dig"},{l:"÷",t:"op"}],
+  [{l:"1/x",t:"un"},{l:"√x",t:"un"},{l:"∛x",t:"un"},{l:"ʸ√x",t:"op2"},{l:"ln",t:"un"},
+   {l:"log",t:"un"},{l:"4",t:"dig"},{l:"5",t:"dig"},{l:"6",t:"dig"},{l:"×",t:"op"}],
+  [{l:"x%",t:"un"},{l:"sin",t:"un"},{l:"cos",t:"un"},{l:"tan",t:"un"},{l:"e",t:"const"},
+   {l:"EE",t:"op2"},{l:"1",t:"dig"},{l:"2",t:"dig"},{l:"3",t:"dig"},{l:"−",t:"op"}],
+  [{l:"±",t:"un"},{l:"sinh",t:"un"},{l:"cosh",t:"un"},{l:"tanh",t:"un"},{l:"π",t:"const"},
+   {l:"Rand",t:"fn"},{l:"0",t:"dig"},{l:".",t:"dot"},{l:"=",t:"eq"},{l:"+",t:"op"}],
+];
+
+let display = "0", expr = "", firstOp = null, pendingOp = null;
+let justEvaled = false, isDeg = true, is2nd = false, mem = 0, openParens = 0;
+
+function factorial(n) {
+  if (n < 0 || !Number.isInteger(n)) return NaN;
+  if (n <= 1) return 1;
+  let r = 1; for (let i = 2; i <= n; i++) r *= i; return r;
+}
+function applyOp(a, op, b) {
+  switch(op) {
+    case "+": return a+b; case "−": return a-b;
+    case "×": return a*b; case "÷": return b===0?NaN:a/b;
+    case "xʸ": return Math.pow(a,b); case "ʸ√x": return Math.pow(b,1/a);
+    case "EE": return a*Math.pow(10,b); default: return b;
+  }
+}
+function toRad(x) { return isDeg ? x*Math.PI/180 : x; }
+function fromRad(x) { return isDeg ? x*180/Math.PI : x; }
+function fmt(n) {
+  if (isNaN(n)) return "Error";
+  if (!isFinite(n)) return n>0?"∞":"-∞";
+  const s = parseFloat(n.toPrecision(10)).toString();
+  return s.length > 14 ? n.toExponential(6) : s;
+}
+function updateDisplay() {
+  const el = document.getElementById("display");
+  el.textContent = display;
+  el.className = "number" + (display.length > 10 ? " small" : "");
+  document.getElementById("expr").textContent = expr || "\u00a0";
+  document.getElementById("modeinfo").textContent =
+    (isDeg?"DEG":"RAD") + (is2nd?" · 2nd":"") + (mem!==0?" · M":"");
+}
+function reset() {
+  display="0"; expr=""; firstOp=null; pendingOp=null;
+  justEvaled=false; openParens=0; updateDisplay();
+}
+
+function handle(val) {
+  const cur = parseFloat(display);
+  if (val==="Rad"){isDeg=false;updateDisplay();return;}
+  if (val==="Deg"){isDeg=true;updateDisplay();return;}
+  if (val==="2nd"){is2nd=!is2nd;updateDisplay();return;}
+  if (val==="mc"){mem=0;updateDisplay();return;}
+  if (val==="m+"){mem+=cur;updateDisplay();return;}
+  if (val==="m−"){mem-=cur;updateDisplay();return;}
+  if (val==="mr"){display=fmt(mem);justEvaled=true;updateDisplay();return;}
+  if (val==="AC"){reset();return;}
+  if (val==="Rand"){display=fmt(Math.random());expr="Rand";justEvaled=true;updateDisplay();return;}
+  if (/^[0-9]$/.test(val)) {
+    if (justEvaled){display=val;expr="";justEvaled=false;}
+    else display = display==="0"?val:display+val;
+    updateDisplay(); return;
+  }
+  if (val===".") {
+    if (justEvaled){display="0.";justEvaled=false;}
+    else if (!display.includes(".")) display+=".";
+    updateDisplay(); return;
+  }
+  if (val==="±"){display=fmt(-cur);updateDisplay();return;}
+  if (val==="x%"){display=fmt(cur/100);updateDisplay();return;}
+  if (val==="("){expr+="(";openParens++;display="0";justEvaled=false;updateDisplay();return;}
+  if (val===")"){
+    if(openParens===0)return;
+    expr+=display+")";openParens--;justEvaled=true;updateDisplay();return;
+  }
+  const isOp = ["+","−","×","÷"].includes(val);
+  if (isOp||val==="xʸ"||val==="ʸ√x"||val==="EE") {
+    if (pendingOp&&!justEvaled) {
+      const r=applyOp(firstOp,pendingOp,cur);
+      display=fmt(r);firstOp=r;expr=fmt(r)+" "+val+" ";
+    } else { firstOp=cur; expr=display+" "+val+" "; }
+    pendingOp=val; justEvaled=false; display="0"; updateDisplay(); return;
+  }
+  if (val==="=") {
+    if (pendingOp&&firstOp!==null) {
+      const r=applyOp(firstOp,pendingOp,cur);
+      expr+=display+" ="; display=fmt(r);
+      firstOp=null; pendingOp=null; justEvaled=true; updateDisplay();
+    } return;
+  }
+  // constants
+  if (val==="e"){display=fmt(Math.E);justEvaled=true;updateDisplay();return;}
+  if (val==="π"){display=fmt(Math.PI);justEvaled=true;updateDisplay();return;}
+  // unary
+  let result;
+  const s = is2nd;
+  switch(val) {
+    case "x²": result=Math.pow(cur,2);break;
+    case "x³": result=Math.pow(cur,3);break;
+    case "x!": result=factorial(Math.round(cur));break;
+    case "1/x": result=1/cur;break;
+    case "√x": result=Math.sqrt(cur);break;
+    case "∛x": result=Math.cbrt(cur);break;
+    case "eˣ": result=Math.exp(cur);break;
+    case "10ˣ": result=Math.pow(10,cur);break;
+    case "ln": result=Math.log(cur);break;
+    case "log": result=Math.log10(cur);break;
+    case "sin": result=s?fromRad(Math.asin(cur)):Math.sin(toRad(cur));break;
+    case "cos": result=s?fromRad(Math.acos(cur)):Math.cos(toRad(cur));break;
+    case "tan": result=s?fromRad(Math.atan(cur)):Math.tan(toRad(cur));break;
+    case "sinh": result=s?Math.asinh(cur):Math.sinh(cur);break;
+    case "cosh": result=s?Math.acosh(cur):Math.cosh(cur);break;
+    case "tanh": result=s?Math.atanh(cur):Math.tanh(cur);break;
+    default: return;
+  }
+  expr=val+"("+display+") ="; display=fmt(result); justEvaled=true; is2nd=false;
+  updateDisplay();
+}
+
+// Build buttons
+const grid = document.getElementById("grid");
+const inv = {sin:"sin⁻¹",cos:"cos⁻¹",tan:"tan⁻¹",sinh:"sinh⁻¹",cosh:"cosh⁻¹",tanh:"tanh⁻¹"};
+BUTTONS.forEach(row => {
+  const rowEl = document.createElement("div");
+  rowEl.className = "row";
+  row.forEach(({l,t}) => {
+    const btn = document.createElement("button");
+    btn.dataset.val = l;
+    btn.textContent = l;
+    if (t==="op"||t==="eq") btn.classList.add("op");
+    if (t==="fn"||t==="mode"||t==="mem") btn.classList.add("fn");
+    btn.addEventListener("click", () => {
+      const v = btn.dataset.val;
+      // apply 2nd mode label mapping
+      if (is2nd && inv[v]) { handle(v); return; }
+      handle(v);
+      // update 2nd labels
+      document.querySelectorAll("button").forEach(b => {
+        const orig = b.dataset.val;
+        b.textContent = is2nd && inv[orig] ? inv[orig] : orig;
+      });
+    });
+    rowEl.appendChild(btn);
+  });
+  grid.appendChild(rowEl);
+});
+updateDisplay();
+</script>
+</body>
 </html>
